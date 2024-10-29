@@ -12,25 +12,6 @@ pub enum RespType {
 }
 
 impl RespType {
-    pub fn get_command(&self) -> Option<(String, Vec<String>)> {
-        if let RespType::Array(values) = self {
-            if let RespType::BulkString(command) = values.get(0).expect("Couldnt get command") {
-                let args = values
-                    .iter()
-                    .skip(1)
-                    .filter_map(|arg| {
-                        if let RespType::BulkString(arg_str) = arg {
-                            Some(arg_str.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                return Some((command.to_string().to_lowercase(), args));
-            }
-        }
-        None
-    }
     pub fn serialize(self) -> String {
         match self {
             RespType::SimpleString(s) => format!("+{}\r\n", s),
