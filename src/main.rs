@@ -86,6 +86,33 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         }
                         None => RespType::NullBulkString.serialize(),
                     },
+                    Command::ConfigGet(key) => match key.as_str() {
+                        "dir" => {
+                            let db = in_memory.lock().expect("Couldn't lock db");
+                            if let Some(dir_val) = &db.config.dir {
+                                RespType::Array(vec![
+                                    RespType::BulkString("dir".to_string()),
+                                    RespType::BulkString(dir_val.to_string()),
+                                ])
+                                .serialize()
+                            } else {
+                                RespType::NullBulkString.serialize()
+                            }
+                        }
+                        "dbfilename" => {
+                            let db = in_memory.lock().expect("Couldn't lock db");
+                            if let Some(dbfilename_val) = &db.config.dbfilename {
+                                RespType::Array(vec![
+                                    RespType::BulkString("dir".to_string()),
+                                    RespType::BulkString(dbfilename_val.to_string()),
+                                ])
+                                .serialize()
+                            } else {
+                                RespType::NullBulkString.serialize()
+                            }
+                        }
+                        _ => unimplemented!(),
+                    },
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }

@@ -10,6 +10,7 @@ pub enum Command {
         ttl: Option<u64>,
     },
     Get(String),
+    ConfigGet(String),
     Unknown,
 }
 
@@ -70,6 +71,22 @@ impl Command {
                             Command::Unknown
                         }
                     }
+                    "config" => {
+                        if let Some(RespType::BulkString(subcommand)) = inner_resp.get(1) {
+                            match subcommand.to_lowercase().as_str() {
+                                "get" => {
+                                    if let Some(RespType::BulkString(key)) = inner_resp.get(2) {
+                                        return Command::ConfigGet(key.clone());
+                                    } else {
+                                        return Command::Unknown;
+                                    }
+                                }
+                                _ => Command::Unknown,
+                            }
+                        } else {
+                            Command::Unknown
+                        }
+                    }
                     _ => Command::Unknown,
                 }
             } else {
@@ -80,3 +97,4 @@ impl Command {
         }
     }
 }
+

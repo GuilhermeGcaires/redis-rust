@@ -17,6 +17,13 @@ impl RespType {
             RespType::SimpleString(s) => format!("+{}\r\n", s),
             RespType::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
             RespType::NullBulkString => format!("$-1\r\n"),
+            RespType::Array(items) => {
+                let mut serialized = format!("*{}\r\n", items.len());
+                for item in items {
+                    serialized.push_str(&item.serialize());
+                }
+                serialized
+            }
             _ => panic!("Unsupported data type"),
         }
     }
