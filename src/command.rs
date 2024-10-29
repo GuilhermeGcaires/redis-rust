@@ -15,8 +15,6 @@ pub enum Command {
 
 impl Command {
     pub fn from_resp(resp: Vec<RespType>) -> Command {
-        println!("Resp vector: {:?}", resp);
-
         if let Some(RespType::Array(inner_resp)) = resp.get(0) {
             if inner_resp.is_empty() {
                 return Command::Unknown;
@@ -55,7 +53,7 @@ impl Command {
                             })
                             .unwrap_or_default();
 
-                        let ttl = inner_resp.get(3).and_then(|x| {
+                        let ttl = inner_resp.get(4).and_then(|x| {
                             if let RespType::BulkString(s) = x {
                                 s.parse::<u64>().ok()
                             } else {

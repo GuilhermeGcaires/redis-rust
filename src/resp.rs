@@ -26,7 +26,6 @@ impl RespType {
                         }
                     })
                     .collect();
-                println!("ARGS: {args:?}");
                 return Some((command.to_string().to_lowercase(), args));
             }
         }

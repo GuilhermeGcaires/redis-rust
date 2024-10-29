@@ -84,7 +84,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                                 RespType::SimpleString(item.value.to_string()).serialize()
                             }
                         }
-                        None => RespType::SimpleString("-1".to_string()).serialize(),
+                        None => RespType::NullBulkString.serialize(),
                     },
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
@@ -120,8 +120,6 @@ async fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
-
-    println!("{:?}", in_memory);
 
     loop {
         let stream = listener.accept().await;
