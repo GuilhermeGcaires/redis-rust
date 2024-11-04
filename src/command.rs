@@ -12,11 +12,12 @@ pub enum Command {
     Get(String),
     ConfigGet(String),
     Unknown,
+    Keys(String),
 }
 
 impl Command {
     pub fn from_resp(resp: Vec<RespType>) -> Command {
-        if let Some(RespType::Array(inner_resp)) = resp.get(0) {
+        if let Some(RespType::Array(inner_resp)) = resp.first() {
             if inner_resp.is_empty() {
                 return Command::Unknown;
             }
@@ -76,13 +77,20 @@ impl Command {
                             match subcommand.to_lowercase().as_str() {
                                 "get" => {
                                     if let Some(RespType::BulkString(key)) = inner_resp.get(2) {
-                                        return Command::ConfigGet(key.clone());
+                                        Command::ConfigGet(key.clone())
                                     } else {
-                                        return Command::Unknown;
+                                        Command::Unknown
                                     }
                                 }
                                 _ => Command::Unknown,
                             }
+                        } else {
+                            Command::Unknown
+                        }
+                    }
+                    "keys" => {
+                        if let Some(RespType::BulkString(key_value)) = inner_resp.get(0) {
+                            Command::Keys(key_value.clone())
                         } else {
                             Command::Unknown
                         }
@@ -97,4 +105,3 @@ impl Command {
         }
     }
 }
-

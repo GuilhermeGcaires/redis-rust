@@ -1,7 +1,9 @@
 use std::{
-    collections::HashMap,
+    fs::File,
+    io::{BufReader, Read},
     sync::{Arc, Mutex},
     time::Duration,
+    usize,
 };
 
 use clap::Parser;
@@ -57,12 +59,13 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
 
                 let filtered_buffer = buffer
                     .iter()
-                    .filter(|&&ch| ch != 0 as u8)
+                    .filter(|&&ch| ch != 0_u8)
                     .copied()
                     .collect::<Vec<u8>>();
 
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
                 let command = parse_message(data);
+                println!("{command:?}");
 
                 let response = match command {
                     Command::Ping => RespType::SimpleString("PONG".to_string()).serialize(),
@@ -113,6 +116,72 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         }
                         _ => unimplemented!(),
                     },
+                    Command::Keys(_) => {
+                        let mut db = in_memory.lock().unwrap();
+                        let mut path = db.config.dir.clone().unwrap();
+                        let file_name = db.config.dbfilename.clone().unwrap();
+
+                        path.push_str("/");
+                        path.push_str(&file_name);
+                        println!("File path: {:?}", path);
+
+                        let file = File::open(path);
+                        match file {
+                            Ok(file) => {
+                                let mut file_buffer: [u8; 1024] = [0; 1024];
+                                let mut reader = BufReader::new(file);
+                                reader.read(&mut file_buffer).unwrap();
+                                println!("Hex Buffer: {:x?}", file_buffer);
+                                println!("Buffer: {:?}", String::from_utf8_lossy(&file_buffer));
+                                let mut iterator =
+                                    file_buffer.iter().skip_while(|&b| *b != 0xfb).skip(1);
+
+                                let _size_hash_table = iterator.next();
+                                let _size_expire_hash_table = iterator.next();
+                                let _value_type = iterator.next();
+                                let key_len = *iterator.next().unwrap() as usize;
+                                let mut key_chars = Vec::with_capacity(key_len);
+                                for _ in 0..key_len {
+                                    if let Some(&byte) = iterator.next() {
+                                        key_chars.push(byte)
+                                    } else {
+                                        break;
+                                    }
+                                }
+
+                                let value_len = *iterator.next().unwrap() as usize;
+                                let mut value_chars = Vec::with_capacity(value_len);
+                                for _ in 0..value_len {
+                                    if let Some(&byte) = iterator.next() {
+                                        value_chars.push(byte)
+                                    } else {
+                                        break;
+                                    }
+                                }
+
+                                let key_string = String::from_utf8_lossy(&key_chars).to_string();
+                                let value_string =
+                                    String::from_utf8_lossy(&value_chars).to_string();
+
+                                let new_item = Item::new(value_string.clone(), None);
+
+                                db.storage.insert(key_string.clone(), new_item);
+
+                                println!("{in_memory:?}");
+
+                                let response =
+                                    RespType::Array(vec![RespType::BulkString(key_string)])
+                                        .serialize();
+                                println!("{response:?}");
+
+                                response
+                            }
+                            Err(_) => {
+                                println!("Falhou");
+                                RespType::Array(vec![]).serialize()
+                            }
+                        }
+                    }
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
@@ -147,6 +216,7 @@ async fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
+    println!("{:?}", in_memory);
 
     loop {
         let stream = listener.accept().await;
