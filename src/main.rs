@@ -124,6 +124,8 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                             .map(|key| RespType::BulkString(key.clone())) // Convert each `&String` to `RespType::BulkString`
                             .collect::<Vec<RespType>>();
 
+                        println!("DB keys: {db_keys:?}");
+
                         RespType::Array(db_keys).serialize()
                     }
                     Command::Unknown => {
@@ -172,35 +174,40 @@ fn load_rdb_to_database(in_memory: Arc<Mutex<Database>>) {
             println!("Buffer: {:?}", String::from_utf8_lossy(&file_buffer));
             let mut iterator = file_buffer.iter().skip_while(|&b| *b != 0xfb).skip(1);
 
-            let _size_hash_table = iterator.next();
+            let size_hash_table = *iterator.next().unwrap() as usize;
             let _size_expire_hash_table = iterator.next();
-            let _value_type = iterator.next();
-            let key_len = *iterator.next().unwrap() as usize;
-            let mut key_chars = Vec::with_capacity(key_len);
-            for _ in 0..key_len {
-                if let Some(&byte) = iterator.next() {
-                    key_chars.push(byte)
-                } else {
-                    break;
+            println!("Hash table size: {:?}", size_hash_table);
+            for _ in 0..size_hash_table {
+                let _value_type = iterator.next();
+                let key_len = *iterator.next().unwrap() as usize;
+                let mut key_chars = Vec::with_capacity(key_len);
+                for _ in 0..key_len {
+                    if let Some(&byte) = iterator.next() {
+                        key_chars.push(byte)
+                    } else {
+                        break;
+                    }
                 }
-            }
 
-            let value_len = *iterator.next().unwrap() as usize;
-            let mut value_chars = Vec::with_capacity(value_len);
-            for _ in 0..value_len {
-                if let Some(&byte) = iterator.next() {
-                    value_chars.push(byte)
-                } else {
-                    break;
+                let value_len = *iterator.next().unwrap() as usize;
+                let mut value_chars = Vec::with_capacity(value_len);
+                for _ in 0..value_len {
+                    if let Some(&byte) = iterator.next() {
+                        value_chars.push(byte)
+                    } else {
+                        break;
+                    }
                 }
+
+                let key_string = String::from_utf8_lossy(&key_chars).to_string();
+                let value_string = String::from_utf8_lossy(&value_chars).to_string();
+
+                let new_item = Item::new(value_string.clone(), None);
+
+                println!("Inserting {:?} : {:?}", key_string.clone(), new_item);
+
+                db.storage.insert(key_string.clone(), new_item);
             }
-
-            let key_string = String::from_utf8_lossy(&key_chars).to_string();
-            let value_string = String::from_utf8_lossy(&value_chars).to_string();
-
-            let new_item = Item::new(value_string.clone(), None);
-
-            db.storage.insert(key_string.clone(), new_item);
         }
         Err(_) => eprintln!("Couldn't find rdb file."),
     }
