@@ -1,12 +1,7 @@
 use std::{
-    fs::File,
-    io::{BufReader, Read},
     sync::{Arc, Mutex},
     time::Duration,
-    usize,
 };
-
-use byteorder::{ByteOrder, LittleEndian};
 
 use clap::Parser;
 
