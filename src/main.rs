@@ -30,6 +30,9 @@ struct Args {
 
     #[arg(long)]
     dbfilename: Option<String>,
+
+    #[arg(long)]
+    port: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -160,8 +163,10 @@ async fn main() {
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
     load_rdb_to_database(Arc::clone(&in_memory));
 
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
-    println!("{:?}", in_memory);
+    let port = args.port.unwrap_or(6379);
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
 
     loop {
         let stream = listener.accept().await;

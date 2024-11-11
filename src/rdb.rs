@@ -25,8 +25,6 @@ pub fn load_rdb_to_database(in_memory: Arc<Mutex<Database>>) {
     path.push_str("/");
     path.push_str(&file_name);
 
-    println!("File path: {:?}", path);
-
     let file = File::open(path);
     match file {
         Ok(file) => {
@@ -50,10 +48,6 @@ pub fn load_rdb_to_database(in_memory: Arc<Mutex<Database>>) {
                         );
 
                         parse_hash_table(&mut buffer_iterator, hash_table_size, &mut db);
-                        println!(
-                            "Database after rdb: {db:?}, keys amount: {:?}",
-                            db.storage.len()
-                        );
                     }
                     _ => {}
                 }
@@ -125,7 +119,6 @@ where
         }
 
         let key_len = *buffer_iterator.next().unwrap() as usize;
-        println!("Key_len:  {key_len:2x?}");
         let mut key_chars = Vec::with_capacity(key_len);
 
         for _ in 0..key_len {
@@ -152,12 +145,10 @@ where
         let new_item = Item::new(value_string.clone(), None);
 
         if is_expired(expiry) && !expiry.is_none() {
-            println!("Teste if expired");
             continue;
         }
 
         db.storage.insert(key_string.clone(), new_item);
-        println!("Expiry duration: {:?}", expiry);
     }
 }
 
@@ -166,9 +157,5 @@ fn is_expired(expiry_timestamp_ms: Option<u128>) -> bool {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
     let current_timestamp_ms = now.as_millis() as u128;
-    println!(
-        "current_timestamp_ms: {:?}, expiry_timestamp : {:?}",
-        current_timestamp_ms, expiry_timestamp_ms
-    );
     expiry_timestamp_ms < Some(current_timestamp_ms)
 }
