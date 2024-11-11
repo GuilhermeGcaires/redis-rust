@@ -144,14 +144,17 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         RespType::Array(db_keys).serialize()
                     }
                     Command::Info => {
+                        let mut response: String = String::new();
                         let db = in_memory.lock().unwrap();
                         let role = &db.config.role;
 
                         if *role == Role::Master {
-                            RespType::BulkString("role:master".to_string()).serialize()
+                            response.push_str("role:master\n");
                         } else {
-                            RespType::BulkString("role:slave".to_string()).serialize()
+                            response.push_str("role:slave\n");
                         }
+                        response.push_str("master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0");
+                        RespType::BulkString(response).serialize()
                     }
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
