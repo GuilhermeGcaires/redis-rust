@@ -33,17 +33,30 @@ struct Args {
 
     #[arg(long)]
     port: Option<u32>,
+
+    #[arg(long)]
+    replicaof: Option<String>,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum Role {
+    Slave,
+    Master,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Config {
     dir: Option<String>,
     dbfilename: Option<String>,
+    role: Role,
 }
 
 impl Config {
-    fn new(dir: Option<String>, dbfilename: Option<String>) -> Self {
-        Self { dir, dbfilename }
+    fn new(dir: Option<String>, dbfilename: Option<String>, role: Role) -> Self {
+        Self {
+            dir,
+            dbfilename,
+            role,
+        }
     }
 }
 
@@ -119,7 +132,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         _ => unimplemented!(),
                     },
                     Command::Keys(_) => {
-                        let mut db = in_memory.lock().unwrap();
+                        let db = in_memory.lock().unwrap();
                         let db_keys = db
                             .storage
                             .keys()
@@ -130,7 +143,16 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
 
                         RespType::Array(db_keys).serialize()
                     }
-                    Command::Info => RespType::BulkString("role:master".to_string()).serialize(),
+                    Command::Info => {
+                        let db = in_memory.lock().unwrap();
+                        let role = &db.config.role;
+
+                        if *role == Role::Master {
+                            RespType::BulkString("role:master".to_string()).serialize()
+                        } else {
+                            RespType::BulkString("role:slave".to_string()).serialize()
+                        }
+                    }
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
@@ -153,13 +175,21 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
 async fn main() {
     let args = Args::parse();
 
+    let role = if args.replicaof.is_some() {
+        Role::Slave
+    } else {
+        Role::Master
+    };
+
     let config: Config = match (&args.dir, &args.dbfilename) {
-        (Some(dir), Some(db_filename)) => Config::new(Some(dir.clone()), Some(db_filename.clone())),
+        (Some(dir), Some(db_filename)) => {
+            Config::new(Some(dir.clone()), Some(db_filename.clone()), role)
+        }
         (Some(_), None) | (None, Some(_)) => {
             eprintln!("Error: Both --dir and --dbfilename must be provided together.");
             std::process::exit(1);
         }
-        (None, None) => Config::new(None, None),
+        (None, None) => Config::new(None, None, role),
     };
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
     load_rdb_to_database(Arc::clone(&in_memory));
