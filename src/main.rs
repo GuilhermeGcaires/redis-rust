@@ -130,6 +130,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
 
                         RespType::Array(db_keys).serialize()
                     }
+                    Command::Info => RespType::BulkString("role:master".to_string()).serialize(),
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }

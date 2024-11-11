@@ -11,8 +11,9 @@ pub enum Command {
     },
     Get(String),
     ConfigGet(String),
-    Unknown,
     Keys(String),
+    Info,
+    Unknown,
 }
 
 impl Command {
@@ -95,6 +96,7 @@ impl Command {
                             Command::Unknown
                         }
                     }
+                    "info" => Command::Info,
                     _ => Command::Unknown,
                 }
             } else {
