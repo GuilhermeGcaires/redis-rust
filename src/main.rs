@@ -1,8 +1,10 @@
 use std::{
+    io::Write,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
+use anyhow::Error;
 use clap::Parser;
 
 use rdb::load_rdb_to_database;
@@ -174,6 +176,20 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
     }
 }
 
+async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
+    let host = args
+        .replicaof
+        .clone()
+        .expect("Expected host and port to be passed")
+        .replace(" ", ":");
+
+    let mut stream = TcpStream::connect(host).await?;
+    let ping = RespType::Array(vec![RespType::BulkString("PING".to_string())]).serialize();
+    stream.write_all(ping.as_bytes()).await?;
+
+    return Ok(());
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -194,6 +210,11 @@ async fn main() {
         }
         (None, None) => Config::new(None, None, role),
     };
+
+    if config.role == Role::Slave {
+        handle_replica(&config, &args).await;
+    }
+
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
     load_rdb_to_database(Arc::clone(&in_memory));
 
