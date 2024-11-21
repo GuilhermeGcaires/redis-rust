@@ -14,6 +14,7 @@ pub enum Command {
     Keys(String),
     Info,
     Unknown,
+    ReplConf(String),
 }
 
 impl Command {
@@ -97,6 +98,35 @@ impl Command {
                         }
                     }
                     "info" => Command::Info,
+                    "replconf" => {
+                        if let Some(RespType::BulkString(subcommand)) = inner_resp.get(1) {
+                            match subcommand.to_lowercase().as_str() {
+                                "listening-port" => {
+                                    if let Some(RespType::BulkString(port)) = inner_resp.get(2) {
+                                        Command::ReplConf(format!("listening-port {}", port))
+                                    } else {
+                                        Command::Unknown
+                                    }
+                                }
+                                "capa" => {
+                                    if let Some(RespType::BulkString(capability)) =
+                                        inner_resp.get(2)
+                                    {
+                                        if capability.to_lowercase() == "psync2" {
+                                            Command::ReplConf("capa psync2".to_string())
+                                        } else {
+                                            Command::Unknown
+                                        }
+                                    } else {
+                                        Command::Unknown
+                                    }
+                                }
+                                _ => Command::Unknown,
+                            }
+                        } else {
+                            Command::Unknown
+                        }
+                    }
                     _ => Command::Unknown,
                 }
             } else {

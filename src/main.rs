@@ -1,5 +1,4 @@
 use std::{
-    io::Write,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -50,14 +49,24 @@ struct Config {
     dir: Option<String>,
     dbfilename: Option<String>,
     role: Role,
+    port: u32,
+    replicaof: Option<String>,
 }
 
 impl Config {
-    fn new(dir: Option<String>, dbfilename: Option<String>, role: Role) -> Self {
+    fn new(
+        dir: Option<String>,
+        dbfilename: Option<String>,
+        role: Role,
+        port: u32,
+        replicaof: Option<String>,
+    ) -> Self {
         Self {
             dir,
             dbfilename,
             role,
+            port,
+            replicaof,
         }
     }
 }
@@ -69,10 +78,10 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
         let mut buffer = [0; 1024];
         match stream.read(&mut buffer).await {
             Ok(bytes_read) => {
-                if bytes_read == 0 {
-                    println!("The connection has been closed");
-                    break;
-                }
+                //if bytes_read == 0 {
+                //    println!("The connection has been closed");
+                //    break;
+                //}
 
                 let filtered_buffer = buffer
                     .iter()
@@ -81,6 +90,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                     .collect::<Vec<u8>>();
 
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
+                println!("Buffer= {:?}", data);
                 let command = parse_message(data);
                 println!("{command:?}");
 
@@ -98,6 +108,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                     }
                     Command::Get(key) => match in_memory.lock().unwrap().storage.get(&key) {
                         Some(item) => {
+                            println!("Testando get");
                             if item.is_expired() {
                                 RespType::NullBulkString.serialize()
                             } else {
@@ -158,6 +169,18 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         response.push_str("master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0");
                         RespType::BulkString(response).serialize()
                     }
+                    Command::ReplConf(arg) => {
+                        println!("{arg:?}");
+                        RespType::SimpleString("+OK\r\n".to_string()).serialize()
+                        //if arg.starts_with("listening-port") {
+                        //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
+                        //} else if arg == "capa psync2" {
+                        //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
+                        //} else {
+                        //    RespType::SimpleString("-ERR Unknown REPLCONF argument\r\n".to_string())
+                        //        .serialize()
+                        //}
+                    }
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
@@ -183,11 +206,61 @@ async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
         .expect("Expected host and port to be passed")
         .replace(" ", ":");
 
-    let mut stream = TcpStream::connect(host).await?;
+    let mut stream = TcpStream::connect(&host)
+        .await
+        .expect("Coudln't create TCPStream");
     let ping = RespType::Array(vec![RespType::BulkString("PING".to_string())]).serialize();
     stream.write_all(ping.as_bytes()).await?;
+    stream.flush().await?;
 
-    return Ok(());
+    let mut buff = vec![0; 1024];
+    let bytes_read = stream.read(&mut buff).await?;
+    let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    if !response.starts_with("+PONG") {
+        return Err(Error::msg("Master didn't respond with PONG to PING"));
+    }
+
+    println!("Received PONG from master");
+
+    let repl_conf_port = RespType::Array(vec![
+        RespType::BulkString("REPLCONF".to_string()),
+        RespType::BulkString("listening-port".to_string()),
+        RespType::BulkString(config.port.to_string()),
+    ])
+    .serialize();
+
+    stream.write_all(repl_conf_port.as_bytes()).await?;
+    stream.flush().await?;
+
+    let bytes_read = stream.read(&mut buff).await?;
+    let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    println!("{:?}", response);
+    if !response.starts_with("+OK") {
+        return Err(Error::msg(
+            "Master didn't acknowledge REPLCONF listening-port",
+        ));
+    }
+    println!("Master acknowledged REPLCONF listening-port");
+
+    let repl_conf_capa = RespType::Array(vec![
+        RespType::BulkString("REPLCONF".to_string()),
+        RespType::BulkString("capa".to_string()),
+        RespType::BulkString("psync2".to_string()),
+    ])
+    .serialize();
+
+    stream.write_all(repl_conf_capa.as_bytes()).await?;
+    stream.flush().await?;
+
+    let bytes_read = stream.read(&mut buff).await?;
+    let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    if !response.starts_with("+OK") {
+        return Err(Error::msg("Master didn't acknowledge REPLCONF capa psync2"));
+    }
+    println!("Master acknowledged REPLCONF capa psync2");
+    println!("Replication handshake completed successfully!");
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -200,25 +273,33 @@ async fn main() {
         Role::Master
     };
 
+    let port = args.port.unwrap_or(6379);
+
     let config: Config = match (&args.dir, &args.dbfilename) {
-        (Some(dir), Some(db_filename)) => {
-            Config::new(Some(dir.clone()), Some(db_filename.clone()), role)
-        }
+        (Some(dir), Some(db_filename)) => Config::new(
+            Some(dir.clone()),
+            Some(db_filename.clone()),
+            role,
+            port,
+            args.replicaof.clone(),
+        ),
         (Some(_), None) | (None, Some(_)) => {
             eprintln!("Error: Both --dir and --dbfilename must be provided together.");
             std::process::exit(1);
         }
-        (None, None) => Config::new(None, None, role),
+        (None, None) => Config::new(None, None, role, port, args.replicaof.clone()),
     };
 
     if config.role == Role::Slave {
-        handle_replica(&config, &args).await;
+        if let Err(e) = handle_replica(&config, &args).await {
+            eprintln!("Failed to establish replication connection: {}", e);
+            std::process::exit(1);
+        }
     }
 
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
     load_rdb_to_database(Arc::clone(&in_memory));
 
-    let port = args.port.unwrap_or(6379);
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
         .unwrap();
