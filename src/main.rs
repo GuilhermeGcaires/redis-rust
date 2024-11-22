@@ -172,7 +172,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                     }
                     Command::ReplConf(arg) => {
                         println!("{arg:?}");
-                        RespType::SimpleString("+OK\r\n".to_string()).serialize()
+                        RespType::SimpleString("OK".to_string()).serialize()
                         //if arg.starts_with("listening-port") {
                         //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
                         //} else if arg == "capa psync2" {
@@ -182,7 +182,7 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         //        .serialize()
                         //}
                     }
-                    Command::PSync => RespType::SimpleString("+OK\r\n".to_string()).serialize(),
+                    Command::PSync => RespType::SimpleString("OK\r\n".to_string()).serialize(),
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
