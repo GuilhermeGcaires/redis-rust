@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -33,11 +34,11 @@ impl Item {
 #[derive(Debug)]
 pub struct Database {
     pub storage: HashMap<String, Item>,
-    pub config: Config,
+    pub config: Arc<Config>,
 }
 
 impl Database {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Arc<Config>) -> Self {
         Self {
             storage: HashMap::new(),
             config,

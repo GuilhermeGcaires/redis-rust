@@ -38,18 +38,19 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum Role {
     Slave,
     Master,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Config {
     dir: Option<String>,
     dbfilename: Option<String>,
     role: Role,
     port: u32,
+    repl_id: String,
     replicaof: Option<String>,
 }
 
@@ -66,12 +67,17 @@ impl Config {
             dbfilename,
             role,
             port,
+            repl_id: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string(),
             replicaof,
         }
     }
 }
 
-async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database>>) {
+async fn handle_client(
+    mut stream: TcpStream,
+    in_memory: &mut Arc<Mutex<Database>>,
+    config: Arc<Config>,
+) {
     println!("Connection created successfully");
 
     loop {
@@ -182,7 +188,10 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         //        .serialize()
                         //}
                     }
-                    Command::PSync => RespType::SimpleString("OK\r\n".to_string()).serialize(),
+                    Command::PSync => {
+                        RespType::SimpleString(format!("FULLRESYNC {} 0", config.repl_id))
+                            .serialize()
+                    }
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
@@ -310,7 +319,9 @@ async fn main() {
         }
     }
 
-    let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(config)));
+    let config = Arc::new(config);
+
+    let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(Arc::clone(&config))));
     load_rdb_to_database(Arc::clone(&in_memory));
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
@@ -322,7 +333,10 @@ async fn main() {
         match stream {
             Ok((stream, _)) => {
                 let mut in_memory_cloned = Arc::clone(&in_memory);
-                tokio::spawn(async move { handle_client(stream, &mut in_memory_cloned).await });
+                let config_cloned = Arc::clone(&config);
+                tokio::spawn(async move {
+                    handle_client(stream, &mut in_memory_cloned, config_cloned).await
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
