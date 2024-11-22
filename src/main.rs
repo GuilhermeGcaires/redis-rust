@@ -76,12 +76,13 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
 
     loop {
         let mut buffer = [0; 1024];
+        println!("buffer: {buffer:?}");
         match stream.read(&mut buffer).await {
             Ok(bytes_read) => {
-                //if bytes_read == 0 {
-                //    println!("The connection has been closed");
-                //    break;
-                //}
+                if bytes_read == 0 {
+                    println!("The connection has been closed");
+                    break;
+                }
 
                 let filtered_buffer = buffer
                     .iter()
@@ -181,12 +182,14 @@ async fn handle_client(mut stream: TcpStream, in_memory: &mut Arc<Mutex<Database
                         //        .serialize()
                         //}
                     }
+                    Command::PSync => RespType::SimpleString("+OK\r\n".to_string()).serialize(),
                     Command::Unknown => {
                         RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
                     }
                 };
 
                 if let Err(e) = stream.write_all(response.as_bytes()).await {
+                    stream.flush().await.expect("Flush failed");
                     eprintln!("Error sending response: {}", e);
                     break;
                 }
@@ -259,6 +262,16 @@ async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
     }
     println!("Master acknowledged REPLCONF capa psync2");
     println!("Replication handshake completed successfully!");
+
+    let psync = RespType::Array(vec![
+        RespType::BulkString("PSYNC".to_string()),
+        RespType::BulkString("?".to_string()),
+        RespType::BulkString("-1".to_string()),
+    ])
+    .serialize();
+
+    stream.write_all(psync.as_bytes()).await?;
+    stream.flush().await?;
 
     Ok(())
 }

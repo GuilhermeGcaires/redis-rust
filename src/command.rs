@@ -15,6 +15,7 @@ pub enum Command {
     Info,
     Unknown,
     ReplConf(String),
+    PSync,
 }
 
 impl Command {
@@ -127,6 +128,7 @@ impl Command {
                             Command::Unknown
                         }
                     }
+                    "psync" => Command::PSync,
                     _ => Command::Unknown,
                 }
             } else {
