@@ -7,6 +7,7 @@ use crate::command::Command;
 pub enum RespType {
     SimpleString(String),
     BulkString(String),
+    Rdb(String),
     NullBulkString,
     Array(Vec<RespType>),
 }
@@ -16,6 +17,7 @@ impl RespType {
         match self {
             RespType::SimpleString(s) => format!("+{}\r\n", s),
             RespType::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
+            RespType::Rdb(s) => format!("{}", s),
             RespType::NullBulkString => ("$-1\r\n").to_string(),
             RespType::Array(items) => {
                 let mut serialized = format!("*{}\r\n", items.len());

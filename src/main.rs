@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Error;
 use clap::Parser;
@@ -10,6 +7,7 @@ use rdb::load_rdb_to_database;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    time::{sleep, Duration},
 };
 
 use crate::resp::{parse_message, RespType};
@@ -99,11 +97,10 @@ async fn handle_client(
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
                 println!("Buffer= {:?}", data);
                 let command = parse_message(data);
-                println!("{command:?}");
 
-                let response = match command {
-                    Command::Ping => RespType::SimpleString("PONG".to_string()).serialize(),
-                    Command::Echo(msg) => RespType::BulkString(msg).serialize(),
+                let response: Option<String> = match command {
+                    Command::Ping => Some(RespType::SimpleString("PONG".to_string()).serialize()),
+                    Command::Echo(msg) => Some(RespType::BulkString(msg).serialize()),
                     Command::Set { key, value, ttl } => {
                         let item = Item::new(value, ttl.map(Duration::from_millis));
                         in_memory
@@ -111,42 +108,46 @@ async fn handle_client(
                             .expect("Could not lock in_memory db")
                             .storage
                             .insert(key, item);
-                        RespType::SimpleString("OK".to_string()).serialize()
+                        Some(RespType::SimpleString("OK".to_string()).serialize())
                     }
                     Command::Get(key) => match in_memory.lock().unwrap().storage.get(&key) {
                         Some(item) => {
                             println!("Testando get");
                             if item.is_expired() {
-                                RespType::NullBulkString.serialize()
+                                Some(RespType::NullBulkString.serialize())
                             } else {
-                                RespType::SimpleString(item.value.to_string()).serialize()
+                                Some(RespType::SimpleString(item.value.to_string()).serialize())
                             }
                         }
-                        None => RespType::NullBulkString.serialize(),
+                        None => Some(RespType::NullBulkString.serialize()),
                     },
                     Command::ConfigGet(key) => match key.as_str() {
                         "dir" => {
                             let db = in_memory.lock().expect("Couldn't lock db");
                             if let Some(dir_val) = &db.config.dir {
-                                RespType::Array(vec![
-                                    RespType::BulkString("dir".to_string()),
-                                    RespType::BulkString(dir_val.to_string()),
-                                ])
-                                .serialize()
+                                Some(
+                                    RespType::Array(vec![
+                                        RespType::BulkString("dir".to_string()),
+                                        RespType::BulkString(dir_val.to_string()),
+                                    ])
+                                    .serialize(),
+                                )
                             } else {
-                                RespType::NullBulkString.serialize()
+                                Some(RespType::NullBulkString.serialize())
                             }
                         }
                         "dbfilename" => {
                             let db = in_memory.lock().expect("Couldn't lock db");
                             if let Some(dbfilename_val) = &db.config.dbfilename {
-                                RespType::Array(vec![
-                                    RespType::BulkString("dir".to_string()),
-                                    RespType::BulkString(dbfilename_val.to_string()),
-                                ])
-                                .serialize()
+                                Some(
+                                    RespType::Array(vec![
+                                        RespType::BulkString("dir".to_string()),
+                                        RespType::BulkString(dbfilename_val.to_string()),
+                                    ])
+                                    .serialize(),
+                                )
                             } else {
-                                RespType::NullBulkString.serialize()
+                                Some(RespType::NullBulkString.serialize())
                             }
                         }
                         _ => unimplemented!(),
@@ -161,7 +162,7 @@ async fn handle_client(
 
                         println!("DB keys: {db_keys:?}");
 
-                        RespType::Array(db_keys).serialize()
+                        Some(RespType::Array(db_keys).serialize())
                     }
                     Command::Info => {
                         let mut response: String = String::new();
@@ -174,11 +175,11 @@ async fn handle_client(
                             response.push_str("role:slave\n");
                         }
                         response.push_str("master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0");
-                        RespType::BulkString(response).serialize()
+                        Some(RespType::BulkString(response).serialize())
                     }
                     Command::ReplConf(arg) => {
                         println!("{arg:?}");
-                        RespType::SimpleString("OK".to_string()).serialize()
+                        Some(RespType::SimpleString("OK".to_string()).serialize())
                         //if arg.starts_with("listening-port") {
                         //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
                         //} else if arg == "capa psync2" {
@@ -189,18 +190,37 @@ async fn handle_client(
                         //}
                     }
                     Command::PSync => {
-                        RespType::SimpleString(format!("FULLRESYNC {} 0", config.repl_id))
-                            .serialize()
+                        let full_resync =
+                            RespType::SimpleString(format!("FULLRESYNC {} 0", config.repl_id))
+                                .serialize();
+
+                        stream.write_all(full_resync.as_bytes()).await.unwrap();
+                        stream.flush().await.unwrap();
+
+                        let empty_file = hex::decode("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap();
+
+                        stream
+                            .write(format!("${}\r\n", empty_file.len()).as_bytes())
+                            .await
+                            .unwrap();
+
+                        stream.write(empty_file.as_slice()).await.unwrap();
+
+                        stream.flush().await.unwrap();
+
+                        None
                     }
-                    Command::Unknown => {
-                        RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize()
-                    }
+                    Command::Unknown => Some(
+                        RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize(),
+                    ),
                 };
 
-                if let Err(e) = stream.write_all(response.as_bytes()).await {
-                    stream.flush().await.expect("Flush failed");
-                    eprintln!("Error sending response: {}", e);
-                    break;
+                if let Some(response) = response {
+                    if let Err(e) = stream.write_all(response.as_bytes()).await {
+                        stream.flush().await.expect("Flush failed");
+                        eprintln!("Error sending response: {}", e);
+                        break;
+                    }
                 }
             }
             Err(e) => {
