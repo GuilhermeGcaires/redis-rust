@@ -6,7 +6,7 @@ use std::{
 
 use crate::Config;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Item {
     pub value: String,
     pub expires: Option<Duration>,

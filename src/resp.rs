@@ -31,6 +31,7 @@ impl RespType {
 }
 
 pub fn parse_message(buffer: String) -> Command {
+    println!("Message to be parsed: {:?}", buffer);
     let mut lines = buffer.lines().peekable();
     let mut resp = Vec::new();
 

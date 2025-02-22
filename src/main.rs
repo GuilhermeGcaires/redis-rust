@@ -4,6 +4,7 @@ use anyhow::Error;
 use clap::Parser;
 
 use rdb::load_rdb_to_database;
+use replication::handle_replica;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -19,6 +20,7 @@ use crate::{
 mod command;
 mod database;
 mod rdb;
+mod replication;
 mod resp;
 
 #[derive(Parser, Debug)]
@@ -36,6 +38,7 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 }
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Role {
     Slave,
@@ -50,6 +53,7 @@ struct Config {
     port: u32,
     repl_id: String,
     replicaof: Option<String>,
+    replication_manager: Arc<ReplicationManager>,
 }
 
 impl Config {
@@ -67,6 +71,41 @@ impl Config {
             port,
             repl_id: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string(),
             replicaof,
+            replication_manager: Arc::new(ReplicationManager::new()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReplicationManager {
+    replicas: Arc<Mutex<Vec<TcpStream>>>,
+}
+
+impl ReplicationManager {
+    fn new() -> Self {
+        Self {
+            replicas: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    async fn add_replica(&self, replica: TcpStream) {
+        self.replicas.lock().unwrap().push(replica);
+    }
+
+    async fn propagate_command(&self, command: RespType) {
+        let serialized_command = command.serialize();
+
+        let replicas: Vec<TcpStream> = {
+            let mut replicas = self.replicas.lock().unwrap();
+            replicas.drain(..).collect()
+        };
+
+        for mut replica in replicas {
+            if let Err(e) = replica.write_all(serialized_command.as_bytes()).await {
+                eprintln!("Error propagating command to replica: {}", e);
+            }
+
+            self.replicas.lock().unwrap().push(replica);
         }
     }
 }
@@ -80,13 +119,13 @@ async fn handle_client(
 
     loop {
         let mut buffer = [0; 1024];
-        println!("buffer: {buffer:?}");
         match stream.read(&mut buffer).await {
             Ok(bytes_read) => {
                 if bytes_read == 0 {
                     println!("The connection has been closed");
                     break;
                 }
+                println!("{:?}", buffer);
 
                 let filtered_buffer = buffer
                     .iter()
@@ -102,17 +141,29 @@ async fn handle_client(
                     Command::Ping => Some(RespType::SimpleString("PONG".to_string()).serialize()),
                     Command::Echo(msg) => Some(RespType::BulkString(msg).serialize()),
                     Command::Set { key, value, ttl } => {
-                        let item = Item::new(value, ttl.map(Duration::from_millis));
+                        let item = Item::new(value.clone(), ttl.map(Duration::from_millis));
                         in_memory
                             .lock()
                             .expect("Could not lock in_memory db")
                             .storage
-                            .insert(key, item);
+                            .insert(key.clone(), item.clone());
+
+                        if config.role == Role::Master {
+                            let set_command = RespType::Array(vec![
+                                RespType::BulkString("SET".to_string()),
+                                RespType::BulkString(key),
+                                RespType::BulkString(value),
+                            ]);
+
+                            config
+                                .replication_manager
+                                .propagate_command(set_command)
+                                .await;
+                        }
                         Some(RespType::SimpleString("OK".to_string()).serialize())
                     }
                     Command::Get(key) => match in_memory.lock().unwrap().storage.get(&key) {
                         Some(item) => {
-                            println!("Testando get");
                             if item.is_expired() {
                                 Some(RespType::NullBulkString.serialize())
                             } else {
@@ -178,16 +229,7 @@ async fn handle_client(
                         Some(RespType::BulkString(response).serialize())
                     }
                     Command::ReplConf(arg) => {
-                        println!("{arg:?}");
                         Some(RespType::SimpleString("OK".to_string()).serialize())
-                        //if arg.starts_with("listening-port") {
-                        //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
-                        //} else if arg == "capa psync2" {
-                        //    RespType::SimpleString("+OK\r\n".to_string()).serialize()
-                        //} else {
-                        //    RespType::SimpleString("-ERR Unknown REPLCONF argument\r\n".to_string())
-                        //        .serialize()
-                        //}
                     }
                     Command::PSync => {
                         let full_resync =
@@ -208,11 +250,13 @@ async fn handle_client(
 
                         stream.flush().await.unwrap();
 
+                        // config.replication_manager.add_replica(stream).await;
+
                         None
                     }
-                    Command::Unknown => Some(
-                        RespType::SimpleString("-ERR Unknown command\r\n".to_string()).serialize(),
-                    ),
+                    Command::Unknown => {
+                        Some(RespType::SimpleString("-ERR Unknown command".to_string()).serialize())
+                    }
                 };
 
                 if let Some(response) = response {
@@ -229,80 +273,6 @@ async fn handle_client(
             }
         }
     }
-}
-
-async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
-    let host = args
-        .replicaof
-        .clone()
-        .expect("Expected host and port to be passed")
-        .replace(" ", ":");
-
-    let mut stream = TcpStream::connect(&host)
-        .await
-        .expect("Coudln't create TCPStream");
-    let ping = RespType::Array(vec![RespType::BulkString("PING".to_string())]).serialize();
-    stream.write_all(ping.as_bytes()).await?;
-    stream.flush().await?;
-
-    let mut buff = vec![0; 1024];
-    let bytes_read = stream.read(&mut buff).await?;
-    let response = String::from_utf8_lossy(&buff[..bytes_read]);
-    if !response.starts_with("+PONG") {
-        return Err(Error::msg("Master didn't respond with PONG to PING"));
-    }
-
-    println!("Received PONG from master");
-
-    let repl_conf_port = RespType::Array(vec![
-        RespType::BulkString("REPLCONF".to_string()),
-        RespType::BulkString("listening-port".to_string()),
-        RespType::BulkString(config.port.to_string()),
-    ])
-    .serialize();
-
-    stream.write_all(repl_conf_port.as_bytes()).await?;
-    stream.flush().await?;
-
-    let bytes_read = stream.read(&mut buff).await?;
-    let response = String::from_utf8_lossy(&buff[..bytes_read]);
-    println!("{:?}", response);
-    if !response.starts_with("+OK") {
-        return Err(Error::msg(
-            "Master didn't acknowledge REPLCONF listening-port",
-        ));
-    }
-    println!("Master acknowledged REPLCONF listening-port");
-
-    let repl_conf_capa = RespType::Array(vec![
-        RespType::BulkString("REPLCONF".to_string()),
-        RespType::BulkString("capa".to_string()),
-        RespType::BulkString("psync2".to_string()),
-    ])
-    .serialize();
-
-    stream.write_all(repl_conf_capa.as_bytes()).await?;
-    stream.flush().await?;
-
-    let bytes_read = stream.read(&mut buff).await?;
-    let response = String::from_utf8_lossy(&buff[..bytes_read]);
-    if !response.starts_with("+OK") {
-        return Err(Error::msg("Master didn't acknowledge REPLCONF capa psync2"));
-    }
-    println!("Master acknowledged REPLCONF capa psync2");
-    println!("Replication handshake completed successfully!");
-
-    let psync = RespType::Array(vec![
-        RespType::BulkString("PSYNC".to_string()),
-        RespType::BulkString("?".to_string()),
-        RespType::BulkString("-1".to_string()),
-    ])
-    .serialize();
-
-    stream.write_all(psync.as_bytes()).await?;
-    stream.flush().await?;
-
-    Ok(())
 }
 
 #[tokio::main]
