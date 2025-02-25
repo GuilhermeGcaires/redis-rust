@@ -1,6 +1,6 @@
 use crate::resp::RespType;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Ping,
     Echo(String),

@@ -116,6 +116,7 @@ async fn handle_client(
     config: Arc<Config>,
 ) {
     println!("Connection created successfully");
+    let mut command = Command::Unknown;
 
     loop {
         let mut buffer = [0; 1024];
@@ -135,11 +136,11 @@ async fn handle_client(
 
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
                 println!("Buffer= {:?}", data);
-                let command = parse_message(data);
+                command = parse_message(data);
 
-                let response: Option<String> = match command {
+                let response: Option<String> = match &command {
                     Command::Ping => Some(RespType::SimpleString("PONG".to_string()).serialize()),
-                    Command::Echo(msg) => Some(RespType::BulkString(msg).serialize()),
+                    Command::Echo(msg) => Some(RespType::BulkString(msg.clone()).serialize()),
                     Command::Set { key, value, ttl } => {
                         let item = Item::new(value.clone(), ttl.map(Duration::from_millis));
                         in_memory
@@ -151,8 +152,8 @@ async fn handle_client(
                         if config.role == Role::Master {
                             let set_command = RespType::Array(vec![
                                 RespType::BulkString("SET".to_string()),
-                                RespType::BulkString(key),
-                                RespType::BulkString(value),
+                                RespType::BulkString(key.clone()),
+                                RespType::BulkString(value.clone()),
                             ]);
 
                             config
@@ -162,7 +163,7 @@ async fn handle_client(
                         }
                         Some(RespType::SimpleString("OK".to_string()).serialize())
                     }
-                    Command::Get(key) => match in_memory.lock().unwrap().storage.get(&key) {
+                    Command::Get(key) => match in_memory.lock().unwrap().storage.get(key) {
                         Some(item) => {
                             if item.is_expired() {
                                 Some(RespType::NullBulkString.serialize())
@@ -250,9 +251,7 @@ async fn handle_client(
 
                         stream.flush().await.unwrap();
 
-                        // config.replication_manager.add_replica(stream).await;
-
-                        None
+                        break;
                     }
                     Command::Unknown => {
                         Some(RespType::SimpleString("-ERR Unknown command".to_string()).serialize())
@@ -272,6 +271,9 @@ async fn handle_client(
                 break;
             }
         }
+    }
+    if command == Command::PSync {
+        config.replication_manager.add_replica(stream).await;
     }
 }
 
@@ -325,7 +327,8 @@ async fn main() {
                 let mut in_memory_cloned = Arc::clone(&in_memory);
                 let config_cloned = Arc::clone(&config);
                 tokio::spawn(async move {
-                    handle_client(stream, &mut in_memory_cloned, config_cloned).await
+                    println!("Current config: {:?}", config_cloned.clone());
+                    handle_client(stream, &mut in_memory_cloned, config_cloned).await;
                 });
             }
             Err(e) => {
