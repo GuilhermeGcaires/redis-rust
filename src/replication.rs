@@ -27,8 +27,6 @@ pub async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
     send_psync(&mut stream, &config.repl_id).await?;
     println!("Replication handshake completed successfully!");
 
-    receive_rdb(&mut stream).await?;
-
     Ok(())
 }
 
@@ -100,15 +98,5 @@ async fn send_psync(stream: &mut TcpStream, repl_id: &str) -> Result<(), Error> 
     stream.write_all(psync.as_bytes()).await?;
     let bytes_read = stream.read(&mut buff).await?;
     let response = String::from_utf8_lossy(&buff[..bytes_read]);
-    Ok(())
-}
-
-async fn receive_rdb(stream: &mut TcpStream) -> Result<(), Error> {
-    let mut buff = vec![0; 1024];
-    let bytes_read = stream.read(&mut buff).await?;
-    let response = String::from_utf8_lossy(&buff[..bytes_read]);
-
-    let bytes_read = stream.read(&mut buff).await?;
-
     Ok(())
 }

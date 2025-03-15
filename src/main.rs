@@ -11,7 +11,10 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-use crate::resp::{parse_message, RespType};
+use crate::{
+    command::handle_command,
+    resp::{parse_message, RespType},
+};
 use crate::{
     command::Command,
     database::{Database, Item},
@@ -122,12 +125,13 @@ async fn handle_client(
         let mut buffer = [0; 1024];
         match stream.read(&mut buffer).await {
             Ok(bytes_read) => {
+                println!("Reading Stream");
+                println!("{:?}", buffer);
                 if bytes_read == 0 {
                     println!("The connection has been closed");
                     break;
                 }
-                println!("{:?}", buffer);
-
+                println!("Bytes read: {bytes_read:?}");
                 let filtered_buffer = buffer
                     .iter()
                     .filter(|&&ch| ch != 0_u8)
@@ -138,129 +142,10 @@ async fn handle_client(
                 println!("Buffer= {:?}", data);
                 command = parse_message(data);
 
-                let response: Option<String> = match &command {
-                    Command::Ping => Some(RespType::SimpleString("PONG".to_string()).serialize()),
-                    Command::Echo(msg) => Some(RespType::BulkString(msg.clone()).serialize()),
-                    Command::Set { key, value, ttl } => {
-                        let item = Item::new(value.clone(), ttl.map(Duration::from_millis));
-                        in_memory
-                            .lock()
-                            .expect("Could not lock in_memory db")
-                            .storage
-                            .insert(key.clone(), item.clone());
-
-                        if config.role == Role::Master {
-                            let set_command = RespType::Array(vec![
-                                RespType::BulkString("SET".to_string()),
-                                RespType::BulkString(key.clone()),
-                                RespType::BulkString(value.clone()),
-                            ]);
-
-                            config
-                                .replication_manager
-                                .propagate_command(set_command)
-                                .await;
-                        }
-                        Some(RespType::SimpleString("OK".to_string()).serialize())
-                    }
-                    Command::Get(key) => match in_memory.lock().unwrap().storage.get(key) {
-                        Some(item) => {
-                            if item.is_expired() {
-                                Some(RespType::NullBulkString.serialize())
-                            } else {
-                                Some(RespType::SimpleString(item.value.to_string()).serialize())
-                            }
-                        }
-                        None => Some(RespType::NullBulkString.serialize()),
-                    },
-                    Command::ConfigGet(key) => match key.as_str() {
-                        "dir" => {
-                            let db = in_memory.lock().expect("Couldn't lock db");
-                            if let Some(dir_val) = &db.config.dir {
-                                Some(
-                                    RespType::Array(vec![
-                                        RespType::BulkString("dir".to_string()),
-                                        RespType::BulkString(dir_val.to_string()),
-                                    ])
-                                    .serialize(),
-                                )
-                            } else {
-                                Some(RespType::NullBulkString.serialize())
-                            }
-                        }
-                        "dbfilename" => {
-                            let db = in_memory.lock().expect("Couldn't lock db");
-                            if let Some(dbfilename_val) = &db.config.dbfilename {
-                                Some(
-                                    RespType::Array(vec![
-                                        RespType::BulkString("dir".to_string()),
-                                        RespType::BulkString(dbfilename_val.to_string()),
-                                    ])
-                                    .serialize(),
-                                )
-                            } else {
-                                Some(RespType::NullBulkString.serialize())
-                            }
-                        }
-                        _ => unimplemented!(),
-                    },
-                    Command::Keys(_) => {
-                        let db = in_memory.lock().unwrap();
-                        let db_keys = db
-                            .storage
-                            .keys()
-                            .map(|key| RespType::BulkString(key.clone())) // Convert each `&String` to `RespType::BulkString`
-                            .collect::<Vec<RespType>>();
-
-                        println!("DB keys: {db_keys:?}");
-
-                        Some(RespType::Array(db_keys).serialize())
-                    }
-                    Command::Info => {
-                        let mut response: String = String::new();
-                        let db = in_memory.lock().unwrap();
-                        let role = &db.config.role;
-
-                        if *role == Role::Master {
-                            response.push_str("role:master\n");
-                        } else {
-                            response.push_str("role:slave\n");
-                        }
-                        response.push_str("master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0");
-                        Some(RespType::BulkString(response).serialize())
-                    }
-                    Command::ReplConf(arg) => {
-                        Some(RespType::SimpleString("OK".to_string()).serialize())
-                    }
-                    Command::PSync => {
-                        let full_resync =
-                            RespType::SimpleString(format!("FULLRESYNC {} 0", config.repl_id))
-                                .serialize();
-
-                        stream.write_all(full_resync.as_bytes()).await.unwrap();
-                        stream.flush().await.unwrap();
-
-                        let empty_file = hex::decode("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap();
-
-                        stream
-                            .write(format!("${}\r\n", empty_file.len()).as_bytes())
-                            .await
-                            .unwrap();
-
-                        stream.write(empty_file.as_slice()).await.unwrap();
-
-                        stream.flush().await.unwrap();
-
-                        break;
-                    }
-                    Command::Unknown => {
-                        Some(RespType::SimpleString("-ERR Unknown command".to_string()).serialize())
-                    }
-                };
-
-                if let Some(response) = response {
+                if let Some(response) =
+                    handle_command(&command, &mut stream, in_memory, &config).await
+                {
                     if let Err(e) = stream.write_all(response.as_bytes()).await {
-                        stream.flush().await.expect("Flush failed");
                         eprintln!("Error sending response: {}", e);
                         break;
                     }
@@ -274,6 +159,7 @@ async fn handle_client(
     }
     if command == Command::PSync {
         config.replication_manager.add_replica(stream).await;
+        println!("{config:?}");
     }
 }
 
@@ -304,7 +190,7 @@ async fn main() {
         (None, None) => Config::new(None, None, role, port, args.replicaof.clone()),
     };
 
-    if config.role == Role::Slave {
+    if config.role == Role::Slave && args.replicaof.is_some() {
         if let Err(e) = handle_replica(&config, &args).await {
             eprintln!("Failed to establish replication connection: {}", e);
             std::process::exit(1);
@@ -319,6 +205,8 @@ async fn main() {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
         .unwrap();
+
+    println!("Listening on {:?}", port);
 
     loop {
         let stream = listener.accept().await;
