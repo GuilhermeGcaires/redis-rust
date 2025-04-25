@@ -1,6 +1,6 @@
 use anyhow::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
@@ -26,6 +26,24 @@ pub async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
 
     send_psync(&mut stream, &config.repl_id).await?;
     println!("Replication handshake completed successfully!");
+
+    let mut buffer = vec![0; 4096];
+    loop {
+        match stream.read(&mut buffer).await {
+            Ok(0) => {
+                println!("Master closed the connection");
+                break;
+            }
+            Ok(bytes_read) => {
+                let data = String::from_utf8_lossy(&buffer[..bytes_read]);
+                println!("Received data from master: {}", data);
+            }
+            Err(e) => {
+                eprintln!("Error reading from master: {}", e);
+                break;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -58,6 +76,7 @@ async fn send_replconf_listening_port(stream: &mut TcpStream, port: u32) -> Resu
     let mut buff = vec![0; 1024];
     let bytes_read = stream.read(&mut buff).await?;
     let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    println!("REPL CONF Response: {:?}", response);
     if !response.starts_with("+OK") {
         return Err(Error::msg(
             "Master didn't acknowledge REPLCONF listening-port",
@@ -80,6 +99,7 @@ async fn send_replconf_capa_psync2(stream: &mut TcpStream) -> Result<(), Error> 
     let mut buff = vec![0; 1024];
     let bytes_read = stream.read(&mut buff).await?;
     let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    println!("REPL CONF PYNC Response: {:?}", response);
     if !response.starts_with("+OK") {
         return Err(Error::msg("Master didn't acknowledge REPLCONF capa psync2"));
     }
@@ -87,7 +107,6 @@ async fn send_replconf_capa_psync2(stream: &mut TcpStream) -> Result<(), Error> 
 }
 
 async fn send_psync(stream: &mut TcpStream, repl_id: &str) -> Result<(), Error> {
-    let mut buff = vec![0; 1024];
     let psync = RespType::Array(vec![
         RespType::BulkString("PSYNC".to_string()),
         RespType::BulkString("?".to_string()),
@@ -96,7 +115,35 @@ async fn send_psync(stream: &mut TcpStream, repl_id: &str) -> Result<(), Error> 
     .serialize();
 
     stream.write_all(psync.as_bytes()).await?;
-    let bytes_read = stream.read(&mut buff).await?;
-    let response = String::from_utf8_lossy(&buff[..bytes_read]);
+    stream.flush().await?;
+
+    let mut reader = BufReader::new(stream);
+
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+    println!("FULLRESYNC line: {:?}", line);
+
+    if !line.starts_with("+FULLRESYNC") {
+        return Err(Error::msg(format!("Unexpected response: {}", line)));
+    }
+
+    line.clear();
+    reader.read_line(&mut line).await?;
+    println!("Bulk string header: {:?}", line);
+
+    let size = line
+        .trim_start_matches('$')
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| Error::msg("Invalid RDB size"))?;
+
+    let mut rdb_data = vec![0u8; size];
+    reader.read_exact(&mut rdb_data).await?;
+
+    println!(
+        "First few RDB bytes: {:?}",
+        &rdb_data[..rdb_data.len().min(32)]
+    );
+
     Ok(())
 }

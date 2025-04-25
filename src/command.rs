@@ -192,13 +192,15 @@ async fn handle_set(
             RespType::BulkString("SET".to_string()),
             RespType::BulkString(key.clone()),
             RespType::BulkString(value.clone()),
-        ]);
-        config
-            .replication_manager
-            .propagate_command(set_command)
-            .await;
+        ])
+        .serialize();
+
+        for replica in &mut *config.replication_manager.replicas.write().await {
+            if let Err(e) = replica.write_all(set_command.as_bytes()).await {
+                eprintln!("Error propagating command to replica: {}", e);
+            }
+        }
     }
-    println!("Tentando escrever");
     Some(RespType::SimpleString("OK".to_string()).serialize())
 }
 
@@ -256,17 +258,23 @@ fn handle_info(in_memory: &mut Arc<Mutex<Database>>) -> Option<String> {
     Some(RespType::BulkString(response).serialize())
 }
 
-async fn handle_psync(stream: &mut TcpStream, config: &Arc<Config>) {
+async fn handle_psync(
+    stream: &mut TcpStream,
+    config: &Arc<Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let full_resync =
         RespType::SimpleString(format!("FULLRESYNC {} 0", config.repl_id)).serialize();
-    stream.write_all(full_resync.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
+    stream.write_all(full_resync.as_bytes()).await?;
+    stream.flush().await?;
 
-    let empty_file = hex::decode("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2").unwrap();
-    stream
-        .write(format!("${}\r\n", empty_file.len()).as_bytes())
-        .await
-        .unwrap();
-    stream.write_all(&empty_file).await.unwrap();
-    stream.flush().await.unwrap();
+    let empty_file = hex::decode("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2")?;
+
+    let rdb_header = format!("${}\r\n", empty_file.len());
+    stream.write_all(rdb_header.as_bytes()).await?;
+    stream.flush().await?;
+    stream.write_all(&empty_file).await?;
+    stream.flush().await?;
+
+    println!("Successfully sent PSYNC response with RDB file");
+    Ok(())
 }

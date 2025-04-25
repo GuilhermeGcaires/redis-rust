@@ -8,6 +8,7 @@ use replication::handle_replica;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::RwLock,
     time::{sleep, Duration},
 };
 
@@ -56,7 +57,7 @@ struct Config {
     port: u32,
     repl_id: String,
     replicaof: Option<String>,
-    replication_manager: Arc<ReplicationManager>,
+    replication_manager: ReplicationManager,
 }
 
 impl Config {
@@ -74,41 +75,20 @@ impl Config {
             port,
             repl_id: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb".to_string(),
             replicaof,
-            replication_manager: Arc::new(ReplicationManager::new()),
+            replication_manager: ReplicationManager::new(),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ReplicationManager {
-    replicas: Arc<Mutex<Vec<TcpStream>>>,
+    replicas: Arc<RwLock<Vec<TcpStream>>>,
 }
 
 impl ReplicationManager {
     fn new() -> Self {
         Self {
-            replicas: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    async fn add_replica(&self, replica: TcpStream) {
-        self.replicas.lock().unwrap().push(replica);
-    }
-
-    async fn propagate_command(&self, command: RespType) {
-        let serialized_command = command.serialize();
-
-        let replicas: Vec<TcpStream> = {
-            let mut replicas = self.replicas.lock().unwrap();
-            replicas.drain(..).collect()
-        };
-
-        for mut replica in replicas {
-            if let Err(e) = replica.write_all(serialized_command.as_bytes()).await {
-                eprintln!("Error propagating command to replica: {}", e);
-            }
-
-            self.replicas.lock().unwrap().push(replica);
+            replicas: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -125,8 +105,6 @@ async fn handle_client(
         let mut buffer = [0; 1024];
         match stream.read(&mut buffer).await {
             Ok(bytes_read) => {
-                println!("Reading Stream");
-                println!("{:?}", buffer);
                 if bytes_read == 0 {
                     println!("The connection has been closed");
                     break;
@@ -158,7 +136,12 @@ async fn handle_client(
         }
     }
     if command == Command::PSync {
-        config.replication_manager.add_replica(stream).await;
+        config
+            .replication_manager
+            .replicas
+            .write()
+            .await
+            .push(stream);
         println!("{config:?}");
     }
 }
