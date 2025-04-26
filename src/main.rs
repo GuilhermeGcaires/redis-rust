@@ -117,7 +117,6 @@ async fn handle_client(
                     .collect::<Vec<u8>>();
 
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
-                println!("Buffer= {:?}", data);
                 command = parse_message(data);
 
                 if let Some(response) =
@@ -178,16 +177,20 @@ async fn main() {
         (None, None) => Config::new(None, None, role, port, args.replicaof.clone()),
     };
 
+    let mut replica_handled = false;
+    let config = Arc::new(config);
+    let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(Arc::clone(&config))));
+
     if config.role == Role::Slave && args.replicaof.is_some() {
-        if let Err(e) = handle_replica(&config, &args).await {
+        let mut in_memory_cloned = Arc::clone(&in_memory);
+        let config_cloned = Arc::clone(&config);
+        if let Err(e) = handle_replica(&mut in_memory_cloned, config_cloned, &args).await {
             eprintln!("Failed to establish replication connection: {}", e);
             std::process::exit(1);
         }
+        replica_handled = true;
     }
 
-    let config = Arc::new(config);
-
-    let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(Arc::clone(&config))));
     load_rdb_to_database(Arc::clone(&in_memory));
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))

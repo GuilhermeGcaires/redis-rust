@@ -172,7 +172,6 @@ pub async fn handle_command(
         Command::ReplConf(_) => Some(RespType::SimpleString("OK".to_string()).serialize()),
         Command::PSync => {
             handle_psync(stream, config).await;
-            println!("Returned from handle_command");
             None
         }
         Command::Unknown => {

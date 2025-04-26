@@ -1,12 +1,18 @@
+use std::sync::{Arc, Mutex};
+
 use anyhow::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
-use crate::{resp::RespType, Args, Config};
+use crate::{database::Database, handle_client, resp::RespType, Args, Config};
 
-pub async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
+pub async fn handle_replica(
+    in_memory: &mut Arc<Mutex<Database>>,
+    config: Arc<Config>,
+    args: &Args,
+) -> Result<(), Error> {
     let host = args
         .replicaof
         .clone()
@@ -27,25 +33,14 @@ pub async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
     send_psync(&mut stream, &config.repl_id).await?;
     println!("Replication handshake completed successfully!");
 
-    let mut buffer = vec![0; 4096];
-    loop {
-        println!("Waiting master command");
-        match stream.read(&mut buffer).await {
-            Ok(0) => {
-                println!("Master closed the connection");
-                break;
-            }
-            Ok(bytes_read) => {
-                let data = String::from_utf8_lossy(&buffer[..bytes_read]);
-                println!("Received data from master: {}", data);
-            }
-            Err(e) => {
-                eprintln!("Error reading from master: {}", e);
-                break;
-            }
-        }
-    }
+    let mut in_memory_cloned = Arc::clone(&in_memory);
+    let config_cloned = Arc::clone(&config);
 
+    tokio::spawn(async move {
+        println!("Current config: {:?}", config_cloned.clone());
+        handle_client(stream, &mut in_memory_cloned, config_cloned).await;
+    });
+    println!("Waiting master command");
     Ok(())
 }
 
