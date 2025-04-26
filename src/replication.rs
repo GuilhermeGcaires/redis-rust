@@ -29,6 +29,7 @@ pub async fn handle_replica(config: &Config, args: &Args) -> Result<(), Error> {
 
     let mut buffer = vec![0; 4096];
     loop {
+        println!("Waiting master command");
         match stream.read(&mut buffer).await {
             Ok(0) => {
                 println!("Master closed the connection");
@@ -121,7 +122,6 @@ async fn send_psync(stream: &mut TcpStream, repl_id: &str) -> Result<(), Error> 
 
     let mut line = String::new();
     reader.read_line(&mut line).await?;
-    println!("FULLRESYNC line: {:?}", line);
 
     if !line.starts_with("+FULLRESYNC") {
         return Err(Error::msg(format!("Unexpected response: {}", line)));
@@ -129,7 +129,6 @@ async fn send_psync(stream: &mut TcpStream, repl_id: &str) -> Result<(), Error> 
 
     line.clear();
     reader.read_line(&mut line).await?;
-    println!("Bulk string header: {:?}", line);
 
     let size = line
         .trim_start_matches('$')

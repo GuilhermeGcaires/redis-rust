@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -169,6 +172,7 @@ pub async fn handle_command(
         Command::ReplConf(_) => Some(RespType::SimpleString("OK".to_string()).serialize()),
         Command::PSync => {
             handle_psync(stream, config).await;
+            println!("Returned from handle_command");
             None
         }
         Command::Unknown => {
@@ -195,10 +199,15 @@ async fn handle_set(
         ])
         .serialize();
 
+        println!(
+            "Replicas: {:?}",
+            config.replication_manager.replicas.read().await
+        );
         for replica in &mut *config.replication_manager.replicas.write().await {
             if let Err(e) = replica.write_all(set_command.as_bytes()).await {
                 eprintln!("Error propagating command to replica: {}", e);
             }
+            println!("SET COMMAND REPLICAS: {:?}", set_command.as_bytes());
         }
     }
     Some(RespType::SimpleString("OK".to_string()).serialize())

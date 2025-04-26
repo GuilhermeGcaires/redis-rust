@@ -128,6 +128,11 @@ async fn handle_client(
                         break;
                     }
                 }
+
+                if command == Command::PSync {
+                    println!("Inserting stream onto replication manager.");
+                    break;
+                }
             }
             Err(e) => {
                 eprintln!("Error reading stream: {}", e);
