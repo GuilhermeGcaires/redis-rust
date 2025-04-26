@@ -15,7 +15,7 @@ use crate::{
     Config, Role,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Ping,
     Echo(String),

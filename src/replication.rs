@@ -40,7 +40,6 @@ pub async fn handle_replica(
         println!("Current config: {:?}", config_cloned.clone());
         handle_client(stream, &mut in_memory_cloned, config_cloned).await;
     });
-    println!("Waiting master command");
     Ok(())
 }
 

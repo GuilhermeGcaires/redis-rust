@@ -1,21 +1,17 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::Error;
 use clap::Parser;
 
 use rdb::load_rdb_to_database;
 use replication::handle_replica;
+use resp::parse_messages;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::RwLock,
-    time::{sleep, Duration},
 };
 
-use crate::{
-    command::handle_command,
-    resp::{parse_message, RespType},
-};
+use crate::command::handle_command;
 use crate::{
     command::Command,
     database::{Database, Item},
@@ -99,7 +95,7 @@ async fn handle_client(
     config: Arc<Config>,
 ) {
     println!("Connection created successfully");
-    let mut command = Command::Unknown;
+    let mut last_command = Command::Unknown;
 
     loop {
         let mut buffer = [0; 1024];
@@ -112,24 +108,34 @@ async fn handle_client(
                 println!("Bytes read: {bytes_read:?}");
                 let filtered_buffer = buffer
                     .iter()
+                    .take(bytes_read)
                     .filter(|&&ch| ch != 0_u8)
                     .copied()
                     .collect::<Vec<u8>>();
 
                 let data = String::from_utf8(filtered_buffer).expect("Expected utf-8 string");
-                command = parse_message(data);
+                let commands = parse_messages(&data);
+                println!("{:?}", commands);
 
-                if let Some(response) =
-                    handle_command(&command, &mut stream, in_memory, &config).await
-                {
-                    if let Err(e) = stream.write_all(response.as_bytes()).await {
-                        eprintln!("Error sending response: {}", e);
+                for command in commands {
+                    last_command = command.clone();
+
+                    if let Some(response) =
+                        handle_command(&command, &mut stream, in_memory, &config).await
+                    {
+                        if let Err(e) = stream.write_all(response.as_bytes()).await {
+                            eprintln!("Error sending response: {}", e);
+                            break;
+                        }
+                    }
+
+                    if command == Command::PSync {
+                        println!("Inserting stream onto replication manager.");
                         break;
                     }
                 }
 
-                if command == Command::PSync {
-                    println!("Inserting stream onto replication manager.");
+                if last_command == Command::PSync {
                     break;
                 }
             }
@@ -139,7 +145,8 @@ async fn handle_client(
             }
         }
     }
-    if command == Command::PSync {
+
+    if last_command == Command::PSync {
         config
             .replication_manager
             .replicas
@@ -177,7 +184,6 @@ async fn main() {
         (None, None) => Config::new(None, None, role, port, args.replicaof.clone()),
     };
 
-    let mut replica_handled = false;
     let config = Arc::new(config);
     let in_memory: Arc<Mutex<Database>> = Arc::new(Mutex::new(Database::new(Arc::clone(&config))));
 
@@ -188,7 +194,6 @@ async fn main() {
             eprintln!("Failed to establish replication connection: {}", e);
             std::process::exit(1);
         }
-        replica_handled = true;
     }
 
     load_rdb_to_database(Arc::clone(&in_memory));

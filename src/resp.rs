@@ -1,6 +1,3 @@
-use std::iter::Peekable;
-use std::str::Lines;
-
 use crate::command::Command;
 
 #[derive(Debug)]
@@ -17,8 +14,8 @@ impl RespType {
         match self {
             RespType::SimpleString(s) => format!("+{}\r\n", s),
             RespType::BulkString(s) => format!("${}\r\n{}\r\n", s.chars().count(), s),
-            RespType::Rdb(s) => format!("{}", s),
-            RespType::NullBulkString => ("$-1\r\n").to_string(),
+            RespType::Rdb(s) => s,
+            RespType::NullBulkString => "$-1\r\n".to_string(),
             RespType::Array(items) => {
                 let mut serialized = format!("*{}\r\n", items.len());
                 for item in items {
@@ -30,76 +27,61 @@ impl RespType {
     }
 }
 
-pub fn parse_message(buffer: String) -> Command {
-    println!("Message to be parsed: {:?}", buffer);
-    let mut lines = buffer.lines().peekable();
-    let mut resp = Vec::new();
+pub fn parse_messages(buffer: &str) -> Vec<Command> {
+    let mut commands = Vec::new();
+    let mut remaining = buffer;
 
-    while let Some(line) = lines.next() {
-        if line.starts_with("*") {
-            if let Ok(count) = line[1..].parse::<usize>() {
-                let mut elements = Vec::with_capacity(count);
-                for _ in 0..count {
-                    if let Some(element) = parse_element(&mut lines) {
-                        elements.push(element)
-                    }
-                }
-                resp.push(RespType::Array(elements));
+    while !remaining.trim().is_empty() {
+        match parse_single_message(remaining) {
+            Ok((command, rest)) => {
+                commands.push(command);
+                remaining = rest;
             }
-            continue;
-        } else if line.starts_with("$") {
-            let length = line
-                .replace("$", "")
-                .parse::<u32>()
-                .expect("Unable to parse bulkstring length");
-            if let Some(s) = parse_bulk_string(&mut lines, length) {
-                resp.push(RespType::BulkString(s));
-            }
-            continue;
+            Err(_) => break, // Incomplete message
         }
-        resp.push(RespType::SimpleString(line.to_string()));
     }
 
-    Command::from_resp(resp)
+    commands
 }
 
-fn parse_element(lines: &mut Peekable<Lines>) -> Option<RespType> {
-    match lines.next() {
-        Some(line) => {
-            if line.starts_with("$") {
-                let length = line
-                    .replace("$", "")
-                    .parse::<u32>()
-                    .expect("Unable to parse bulkstring length");
-                if let Some(s) = parse_bulk_string(lines, length) {
-                    return Some(RespType::BulkString(s));
-                }
-            } else if line.starts_with("*") {
-                if let Ok(count) = line[1..].parse::<usize>() {
-                    let mut elements = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        if let Some(element) = parse_element(lines) {
-                            elements.push(element)
-                        }
-                    }
-                    return Some(RespType::Array(elements));
-                }
-            } else {
-                return Some(RespType::SimpleString(line.to_string()));
-            }
-        }
-        _ => (),
-    }
-    None
-}
+fn parse_single_message(buffer: &str) -> Result<(Command, &str), &'static str> {
+    let mut lines = buffer.split("\r\n").peekable();
+    let mut bytes_consumed = 0;
 
-fn parse_bulk_string(lines: &mut Peekable<Lines>, length: u32) -> Option<String> {
-    if let Some(data) = lines.next() {
-        if data.len() as u32 == length {
-            return Some(data.to_string());
-        } else {
-            panic!("String length different than parsed length");
-        }
+    let first_line = lines.next().ok_or("Empty buffer")?;
+    bytes_consumed += first_line.len() + 2;
+
+    if !first_line.starts_with('*') {
+        return Err("Expected array");
     }
-    None
+    let count = first_line[1..]
+        .parse::<usize>()
+        .map_err(|_| "Invalid array length")?;
+
+    let mut elements = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let size_line = lines.next().ok_or("Unexpected end of input (size line)")?;
+        bytes_consumed += size_line.len() + 2;
+
+        if !size_line.starts_with('$') {
+            return Err("Expected bulk string");
+        }
+
+        let len = size_line[1..]
+            .parse::<usize>()
+            .map_err(|_| "Invalid bulk string length")?;
+
+        let data_line = lines.next().ok_or("Unexpected end of input (data line)")?;
+        bytes_consumed += data_line.len() + 2;
+
+        if data_line.len() != len {
+            return Err("Bulk string length mismatch");
+        }
+
+        elements.push(RespType::BulkString(data_line.to_string()));
+    }
+
+    let command = Command::from_resp(vec![RespType::Array(elements)]);
+    Ok((command, &buffer[bytes_consumed..]))
 }
