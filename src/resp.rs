@@ -37,7 +37,7 @@ pub fn parse_messages(buffer: &str) -> Vec<Command> {
                 commands.push(command);
                 remaining = rest;
             }
-            Err(_) => break, // Incomplete message
+            Err(_) => break,
         }
     }
 

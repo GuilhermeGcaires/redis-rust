@@ -137,6 +137,7 @@ impl Command {
                                         Command::Unknown
                                     }
                                 }
+                                "getack" => Command::ReplConf("getack".to_string()),
                                 _ => Command::Unknown,
                             }
                         } else {
@@ -169,7 +170,18 @@ pub async fn handle_command(
         Command::ConfigGet(key) => handle_config_get(key, in_memory),
         Command::Keys(_) => handle_keys(in_memory),
         Command::Info => handle_info(in_memory),
-        Command::ReplConf(_) => Some(RespType::SimpleString("OK".to_string()).serialize()),
+        Command::ReplConf(message) => {
+            if message == "getack" {
+                let ack_response = RespType::Array(vec![
+                    RespType::BulkString("REPLCONF".to_string()),
+                    RespType::BulkString("ACK".to_string()),
+                    RespType::BulkString("0".to_string()),
+                ]);
+                Some(ack_response.serialize())
+            } else {
+                Some(RespType::SimpleString("OK".to_string()).serialize())
+            }
+        }
         Command::PSync => {
             handle_psync(stream, config).await;
             None
